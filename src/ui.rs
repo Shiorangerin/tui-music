@@ -97,16 +97,14 @@ fn draw_spectrum(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let mid_y = inner.y + inner.height / 2;
-    let half = (inner.height as f32 / 2.0).max(1.0);
-
-    // 每一可用列宽 = 1，所以频段数 = inner.width，保证填满（无右侧空缺）
+    // 每列一格宽、列数 = inner.width，保证填满整宽
     let cols = inner.width as usize;
     if cols == 0 {
         return;
     }
+    let max_h = inner.height as i32; // 总可用高度
 
-    // 把 smoothed 数据重采样到 cols 列
+    // 重采样 smoothed 到 cols 列
     let src = &app.smoothed;
     let v: Vec<f32> = if src.is_empty() {
         vec![0.0; cols]
@@ -124,29 +122,24 @@ fn draw_spectrum(f: &mut Frame, app: &App, area: Rect) {
             .collect()
     };
 
-    // 阈值：能量不足一格高的列视为静默，画中线点；有意义的能量列才画频谱
-    let bar_thresh = 1.0 / half;
-
-    // 中线：只在静默列铺一个淡点；有能量的列由频谱接管
-    for (i, x) in (inner.x..inner.x + inner.width).enumerate() {
-        if i < v.len() && v[i] > bar_thresh {
-            continue; // 该列有足够频谱能量，不画静线
-        }
-        let cell = &mut f.buffer_mut()[(x, mid_y)];
-        if cell.symbol() == " " {
-            cell.set_char('─');
-            cell.set_style(Style::default().fg(Color::Rgb(60, 62, 80)));
-        }
+    // 底线：整行实线
+    let bottom = inner.bottom() - 1;
+    for x in inner.x..inner.x + inner.width {
+        let cell = &mut f.buffer_mut()[(x, bottom)];
+        cell.set_char('─');
+        cell.set_style(Style::default().fg(Color::Rgb(60, 62, 80)));
     }
 
-    // 每列一个 1-字符宽的小点列；能量决定上下两条镜像细线长度。
-    // 关键：能量很小时 cull 掉一端（按整列偶数/奇数分布），避免稳态下两条平行线。
+    // 阈值：能量不足一格高的列视作静默
+    let bar_thresh = 1.0 / max_h as f32;
+
+    // 柱子：从底线上方一格向上画密集小点
     for i in 0..cols {
         let energy = v[i].clamp(0.0, 1.0);
         if energy < bar_thresh {
-            continue; // 能量太少，留中线
+            continue;
         }
-        let h = energy * half;
+        let h = energy * max_h as f32;
         let full = h.floor() as i32;
         let frac = h - full as f32;
 
@@ -154,37 +147,22 @@ fn draw_spectrum(f: &mut Frame, app: &App, area: Rect) {
         let color = spectrum_color(freq);
 
         let x = inner.x + i as u16;
+        let top = inner.y as i32;
+        let base = bottom as i32 - 1; // 底线上方一格起步
 
-        // 上半：从 mid_y - 1 起，向上画 full 个点 (避开中线那一行)
-        let mut up = 0i32;
-        while up < full {
-            let y = mid_y as i32 - 1 - up;
-            if y < inner.y as i32 {
+        let mut drawn = 0i32;
+        while drawn < full {
+            let y = base - drawn;
+            if y < top {
                 break;
             }
             put_dot(f, x, y as u16, color, false);
-            up += 1;
+            drawn += 1;
         }
-        if frac > 0.0 && up < half as i32 && full >= 1 {
-            let y = mid_y as i32 - 1 - up;
-            if y >= inner.y as i32 {
-                put_dot(f, x, y as u16, color, true);
-            }
-        }
-
-        // 下半镜像：从 mid_y + 1 起
-        let mut dn = 0i32;
-        while dn < full {
-            let y = mid_y as i32 + 1 + dn;
-            if y > inner.bottom() as i32 - 1 {
-                break;
-            }
-            put_dot(f, x, y as u16, color, false);
-            dn += 1;
-        }
-        if frac > 0.0 && dn < half as i32 && full >= 1 {
-            let y = mid_y as i32 + 1 + dn;
-            if y <= inner.bottom() as i32 - 1 {
+        // 顶端 1/8 像素精度半点收尾（仅当已有整格才画，避免恒底座）
+        if frac > 0.0 && full >= 1 {
+            let y = base - drawn;
+            if y >= top {
                 put_dot(f, x, y as u16, color, true);
             }
         }

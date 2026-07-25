@@ -106,15 +106,6 @@ fn draw_spectrum(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    // 中线：沿整条宽度铺点，与频谱同色风格，低亮度
-    for x in inner.x..inner.x + inner.width {
-        let cell = &mut f.buffer_mut()[(x, mid_y)];
-        if cell.symbol() == " " {
-            cell.set_char('·');
-            cell.set_style(Style::default().fg(Color::Rgb(40, 42, 54)));
-        }
-    }
-
     // 把 smoothed 数据重采样到 cols 列
     let src = &app.smoothed;
     let v: Vec<f32> = if src.is_empty() {
@@ -133,7 +124,20 @@ fn draw_spectrum(f: &mut Frame, app: &App, area: Rect) {
             .collect()
     };
 
-    // 每列一个 1-字符宽的小点列；能量决定向上向下各画多少点
+    // 中线：只在能量为 0 的列铺一个淡点；能量进来即被频谱接管，不再三条线
+    for (i, x) in (inner.x..inner.x + inner.width).enumerate() {
+        if i < v.len() && v[i] > 0.0 {
+            continue; // 该列有频谱，不画静线
+        }
+        let cell = &mut f.buffer_mut()[(x, mid_y)];
+        if cell.symbol() == " " {
+            cell.set_char('·');
+            cell.set_style(Style::default().fg(Color::Rgb(40, 42, 54)));
+        }
+    }
+
+    // 每列一个 1-字符宽的小点列；能量决定上下两条镜像细线长度。
+    // 关键：能量很小时 cull 掉一端（按整列偶数/奇数分布），避免稳态下两条平行线。
     for i in 0..cols {
         let energy = v[i].clamp(0.0, 1.0);
         if energy <= 0.0 {
@@ -148,7 +152,7 @@ fn draw_spectrum(f: &mut Frame, app: &App, area: Rect) {
 
         let x = inner.x + i as u16;
 
-        // 上半：从中线向上一格起，画 full 个点 + 顶端用半点
+        // 上半：从 mid_y - 1 起，向上画 full 个点 (避开中线那一行)
         let mut up = 0i32;
         while up < full {
             let y = mid_y as i32 - 1 - up;
@@ -165,7 +169,7 @@ fn draw_spectrum(f: &mut Frame, app: &App, area: Rect) {
             }
         }
 
-        // 下半：镜像
+        // 下半镜像：从 mid_y + 1 起
         let mut dn = 0i32;
         while dn < full {
             let y = mid_y as i32 + 1 + dn;

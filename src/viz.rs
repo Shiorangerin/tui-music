@@ -16,12 +16,12 @@ pub fn compute(samples: &[f32], num_bars: usize) -> Vec<f32> {
     let fft = planner.plan_fft_forward(FFT_N);
     fft.process(&mut input);
 
-    const GAIN: f32 = 1.4;
-    const FLOOR: f32 = 0.05;
-    const GAMMA: f32 = 0.28; // aggressive: only peaks fill up, ambient stays low
-
-    let mut out = vec![0.0f32; num_bars];
+    // mag typically in [0, 1]; normalize then gamma > 1 so low/medium stays low,
+    // only genuine peaks approach 1.0.
+    // 第一遍：计算每个频段的原始magnitude
     let max_k = (FFT_N / 2) as f32;
+    let mut mags = vec![0.0f32; num_bars];
+    let mut peak = 1e-6f32;
     for b in 0..num_bars {
         let f0 = (b as f32 / num_bars as f32).powi(2);
         let f1 = ((b + 1) as f32 / num_bars as f32).powi(2);
@@ -31,8 +31,20 @@ pub fn compute(samples: &[f32], num_bars: usize) -> Vec<f32> {
         for k in lo..hi {
             mag = mag.max(input[k].norm());
         }
-        let lin = (mag * GAIN - FLOOR).max(0.0);
-        out[b] = lin.powf(GAMMA).clamp(0.0, 1.0);
+        mags[b] = mag;
+        if mag > peak {
+            peak = mag;
+        }
+    }
+    // 第二遍：按本帧峰值归一化到 [0,1]，再用 gamma>1 压缩
+    const FLOOR_RATIO: f32 = 0.06; // 数值低于峰值的6%视为无声
+    const GAMMA: f32 = 2.0;
+    const HEADROOM: f32 = 0.85; // 峰值大约占 85% 高度，留出余量
+    let mut out = vec![0.0f32; num_bars];
+    for b in 0..num_bars {
+        let r = mags[b] / peak; // [0, 1]
+        let m = (r - FLOOR_RATIO).max(0.0) / (1.0 - FLOOR_RATIO);
+        out[b] = (m.powf(GAMMA) * HEADROOM).clamp(0.0, 1.0);
     }
     out
 }

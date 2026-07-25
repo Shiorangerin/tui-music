@@ -15,7 +15,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
 #[derive(Parser)]
-#[command(name = "tui-music", about = "A terminal music player")]
+#[command(name = "tui-music", version, about = "A terminal music player")]
 struct Args {
     /// Path to music directory (default: ~/Music)
     #[arg(short, long)]

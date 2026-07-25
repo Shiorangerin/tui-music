@@ -97,52 +97,120 @@ fn draw_spectrum(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    if app.bars.is_empty() {
+    let mid_y = inner.y + inner.height / 2;
+    let half = (inner.height as f32 / 2.0).max(1.0);
+
+    // 每一可用列宽 = 1，所以频段数 = inner.width，保证填满（无右侧空缺）
+    let cols = inner.width as usize;
+    if cols == 0 {
         return;
     }
 
-    let cols = app.bars.len();
-    let mid_y = inner.y + inner.height / 2;
-    let half = (inner.height / 2) as f32;
-
-    // 中线：稀疏暗点，融入背景
+    // 中线：沿整条宽度铺点，与频谱同色风格，低亮度
     for x in inner.x..inner.x + inner.width {
-        if (x - inner.x) % 3 != 0 {
-            continue;
-        }
         let cell = &mut f.buffer_mut()[(x, mid_y)];
         if cell.symbol() == " " {
             cell.set_char('·');
-            cell.set_style(Style::default().fg(Color::Rgb(50, 50, 60)));
+            cell.set_style(Style::default().fg(Color::Rgb(40, 42, 54)));
         }
     }
 
-    // 频谱：从中线上下镜像延伸，细线（每列一格宽）
-    let cell_w = (inner.width as usize / cols.max(1)).max(1);
+    // 把 smoothed 数据重采样到 cols 列
+    let src = &app.smoothed;
+    let v: Vec<f32> = if src.is_empty() {
+        vec![0.0; cols]
+    } else if src.len() == cols {
+        src.clone()
+    } else {
+        (0..cols)
+            .map(|i| {
+                let p = i as f32 * (src.len() as f32 - 1.0) / (cols as f32 - 1.0).max(1.0);
+                let lo = p.floor() as usize;
+                let hi = (lo + 1).min(src.len() - 1);
+                let t = p - lo as f32;
+                src[lo] * (1.0 - t) + src[hi] * t
+            })
+            .collect()
+    };
+
+    // 每列一个 1-字符宽的小点列；能量决定向上向下各画多少点
     for i in 0..cols {
-        let v = (app.bars[i] as f32).min(20.0) / 20.0;
-        let h = v * half;
-        let x = inner.x + (i * cell_w) as u16;
+        let energy = v[i].clamp(0.0, 1.0);
+        if energy <= 0.0 {
+            continue;
+        }
+        let h = energy * half;
+        let full = h.floor() as i32;
+        let frac = h - full as f32;
 
-        let freq = i as f32 / (cols - 1).max(1) as f32;
-        let color = spectrum_color(freq, 0.0);
+        let freq = i as f32 / (cols as f32 - 1.0).max(1.0);
+        let color = spectrum_color(freq);
 
-        // 上半部分（从中线向上一格起算）
-        draw_bar_half(f, x, mid_y.saturating_sub(1), inner.y, h, true, color);
-        // 下半部分（从中线向下一格起算），镜像
-        draw_bar_half(f, x, mid_y + 1, inner.bottom() - 1, h, false, color);
+        let x = inner.x + i as u16;
+
+        // 上半：从中线向上一格起，画 full 个点 + 顶端用半点
+        let mut up = 0i32;
+        while up < full {
+            let y = mid_y as i32 - 1 - up;
+            if y < inner.y as i32 {
+                break;
+            }
+            put_dot(f, x, y as u16, color, false);
+            up += 1;
+        }
+        if frac > 0.0 && up < half as i32 {
+            let y = mid_y as i32 - 1 - up;
+            if y >= inner.y as i32 {
+                put_dot(f, x, y as u16, color, true);
+            }
+        }
+
+        // 下半：镜像
+        let mut dn = 0i32;
+        while dn < full {
+            let y = mid_y as i32 + 1 + dn;
+            if y > inner.bottom() as i32 - 1 {
+                break;
+            }
+            put_dot(f, x, y as u16, color, false);
+            dn += 1;
+        }
+        if frac > 0.0 && dn < half as i32 {
+            let y = mid_y as i32 + 1 + dn;
+            if y <= inner.bottom() as i32 - 1 {
+                put_dot(f, x, y as u16, color, true);
+            }
+        }
     }
 }
 
-fn spectrum_color(freq: f32, _intensity: f32) -> Color {
-    // 一条柔和的频率渐变：青 -> 紫红 -> 琥珀，不动白
-    if freq < 0.33 {
-        blend(Color::Rgb(80, 200, 220), Color::Rgb(140, 130, 230), freq / 0.33)
-    } else if freq < 0.66 {
-        blend(Color::Rgb(140, 130, 230), Color::Rgb(220, 120, 170), (freq - 0.33) / 0.33)
+fn put_dot(f: &mut Frame, x: u16, y: u16, color: Color, half: bool) {
+    let ch = if half { '∙' } else { '·' };
+    let style = if half {
+        Style::default().fg(dim_color(color, 0.6))
     } else {
-        blend(Color::Rgb(220, 120, 170), Color::Rgb(240, 200, 120), (freq - 0.66) / 0.34)
+        Style::default().fg(color)
+    };
+    f.buffer_mut().set_string(x, y, ch.encode_utf8(&mut [0u8; 4]), style);
+}
+
+fn spectrum_color(freq: f32) -> Color {
+    if freq < 0.33 {
+        blend(Color::Rgb(120, 220, 240), Color::Rgb(170, 140, 250), freq / 0.33)
+    } else if freq < 0.66 {
+        blend(Color::Rgb(170, 140, 250), Color::Rgb(250, 130, 200), (freq - 0.33) / 0.33)
+    } else {
+        blend(Color::Rgb(250, 130, 200), Color::Rgb(250, 210, 160), (freq - 0.66) / 0.34)
     }
+}
+
+fn dim_color(c: Color, factor: f32) -> Color {
+    let (r, g, b) = to_rgb(c);
+    Color::Rgb(
+        (r as f32 * factor) as u8,
+        (g as f32 * factor) as u8,
+        (b as f32 * factor) as u8,
+    )
 }
 
 fn blend(a: Color, b: Color, t: f32) -> Color {
@@ -164,73 +232,6 @@ fn to_rgb(c: Color) -> (u8, u8, u8) {
         Color::Yellow => (240, 210, 90),
         Color::White => (230, 230, 230),
         _ => (150, 150, 150),
-    }
-}
-
-/// 画从 `start_y` 沿 `direction` 方向（上为 true，下为 false）延伸 `h` 个单位的细线。
-/// `bound` 是该方向上的不可逾越边界（向上画时是顶边 inner.y，向下画时是底边）。
-fn draw_bar_half(
-    f: &mut Frame,
-    x: u16,
-    start_y: u16,
-    bound: u16,
-    h: f32,
-    upward: bool,
-    color: Color,
-) {
-    if h <= 0.0 {
-        return;
-    }
-    let full = h.floor() as u16;
-    let frac = h - full as f32;
-
-    let mut y = start_y;
-    for k in 0..full {
-        if upward {
-            if y < bound {
-                break;
-            }
-        } else if y > bound {
-            break;
-        }
-        put(f, x, y, "█", color);
-        if upward {
-            if y == 0 {
-                break;
-            }
-            y = y - 1;
-        } else {
-            y = y + 1;
-        }
-        let _ = k;
-    }
-
-    // 顶端/底端 sub-block 平滑收尾
-    if frac > 0.0 {
-        let level = ((frac * 8.0).ceil() as u8).clamp(1, 8);
-        let ch = sub_block(level);
-        if upward && y >= bound {
-            put(f, x, y, ch, color);
-        } else if !upward && y <= bound {
-            put(f, x, y, ch, color);
-        }
-    }
-}
-
-fn put(f: &mut Frame, x: u16, y: u16, s: &str, color: Color) {
-    f.buffer_mut().set_string(x, y, s, Style::default().fg(color));
-}
-
-fn sub_block(level: u8) -> &'static str {
-    match level {
-        1 => "▁",
-        2 => "▂",
-        3 => "▃",
-        4 => "▄",
-        5 => "▅",
-        6 => "▆",
-        7 => "▇",
-        _ => "█",
     }
 }
 

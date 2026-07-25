@@ -197,9 +197,9 @@ impl App {
             self.smoothed = raw.clone();
             return;
         }
-        // attack fast, release slow => bars rise quickly, fall gently
-        const ATTACK: f32 = 0.45;
-        const RELEASE: f32 = 0.08;
+        // aggressive attack, moderate release => snappy response, quick decay
+        const ATTACK: f32 = 0.7;
+        const RELEASE: f32 = 0.25;
         for (i, &r) in raw.iter().enumerate() {
             let s = self.smoothed[i];
             let coeff = if r > s { ATTACK } else { RELEASE };

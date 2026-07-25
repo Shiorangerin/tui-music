@@ -16,9 +16,9 @@ pub fn compute(samples: &[f32], num_bars: usize) -> Vec<f32> {
     let fft = planner.plan_fft_forward(FFT_N);
     fft.process(&mut input);
 
-    const GAIN: f32 = 1.6;
-    const FLOOR: f32 = 0.04;
-    const GAMMA: f32 = 0.42; // steep compression: low stays low, peaks stay tall
+    const GAIN: f32 = 1.4;
+    const FLOOR: f32 = 0.05;
+    const GAMMA: f32 = 0.28; // aggressive: only peaks fill up, ambient stays low
 
     let mut out = vec![0.0f32; num_bars];
     let max_k = (FFT_N / 2) as f32;

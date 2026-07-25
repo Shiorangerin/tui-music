@@ -16,6 +16,7 @@ pub struct App {
     pub volume: f32,
     pub player: Player,
     pub bars: Vec<u16>,
+    pub smoothed: Vec<f32>,
     pub should_quit: bool,
     pub search: String,
     pub search_active: bool,
@@ -40,6 +41,7 @@ impl App {
             volume: 0.6,
             player: Player::new()?,
             bars: Vec::new(),
+            smoothed: Vec::new(),
             should_quit: false,
             search: String::new(),
             search_active: false,
@@ -190,6 +192,21 @@ impl App {
         self.player.set_volume(self.volume);
     }
 
+    fn smooth(&mut self, raw: Vec<f32>) {
+        if self.smoothed.len() != raw.len() {
+            self.smoothed = raw.clone();
+            return;
+        }
+        // attack fast, release slow => bars rise quickly, fall gently
+        const ATTACK: f32 = 0.45;
+        const RELEASE: f32 = 0.08;
+        for (i, &r) in raw.iter().enumerate() {
+            let s = self.smoothed[i];
+            let coeff = if r > s { ATTACK } else { RELEASE };
+            self.smoothed[i] = s + (r - s) * coeff;
+        }
+    }
+
     pub fn update(&mut self, num_bars: usize) -> anyhow::Result<()> {
         self.player.update_position();
 
@@ -218,7 +235,9 @@ impl App {
         }
 
         let samples = self.player.viz.latest(tui_music::viz::FFT_N);
-        self.bars = tui_music::viz::compute(&samples, num_bars.max(16));
+        let raw = tui_music::viz::compute(&samples, num_bars.max(16));
+        self.smooth(raw);
+        self.bars = self.smoothed.iter().map(|&v| (v * 20.0) as u16).collect();
         Ok(())
     }
 

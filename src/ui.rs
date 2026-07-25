@@ -122,7 +122,7 @@ fn draw_spectrum(f: &mut Frame, app: &App, area: Rect) {
         let x = inner.x + (i * cell_w) as u16;
 
         let freq = i as f32 / (cols - 1).max(1) as f32;
-        let color = spectrum_color(freq, v);
+        let color = spectrum_color(freq, 0.0);
 
         // 上半部分（从中线向上一格起算）
         draw_bar_half(f, x, mid_y.saturating_sub(1), inner.y, h, true, color);
@@ -131,21 +131,14 @@ fn draw_spectrum(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-fn spectrum_color(freq: f32, intensity: f32) -> Color {
-    // 频率渐变 + 强度提亮
-    let base = if freq < 0.5 {
-        // 低频：青 -> 蓝
-        let t = freq * 2.0;
-        blend(Color::Cyan, Color::Blue, t)
+fn spectrum_color(freq: f32, _intensity: f32) -> Color {
+    // 一条柔和的频率渐变：青 -> 紫红 -> 琥珀，不动白
+    if freq < 0.33 {
+        blend(Color::Rgb(80, 200, 220), Color::Rgb(140, 130, 230), freq / 0.33)
+    } else if freq < 0.66 {
+        blend(Color::Rgb(140, 130, 230), Color::Rgb(220, 120, 170), (freq - 0.33) / 0.33)
     } else {
-        // 高频：品红 -> 黄
-        let t = (freq - 0.5) * 2.0;
-        blend(Color::Magenta, Color::Yellow, t)
-    };
-    if intensity > 0.7 {
-        blend(base, Color::White, 0.25)
-    } else {
-        base
+        blend(Color::Rgb(220, 120, 170), Color::Rgb(240, 200, 120), (freq - 0.66) / 0.34)
     }
 }
 
@@ -161,12 +154,13 @@ fn blend(a: Color, b: Color, t: f32) -> Color {
 
 fn to_rgb(c: Color) -> (u8, u8, u8) {
     match c {
-        Color::Cyan => (0, 255, 255),
-        Color::Blue => (0, 120, 255),
-        Color::Magenta => (255, 0, 255),
-        Color::Yellow => (255, 255, 0),
-        Color::White => (255, 255, 255),
-        _ => (180, 180, 180),
+        Color::Rgb(r, g, b) => (r, g, b),
+        Color::Cyan => (0, 220, 220),
+        Color::Blue => (60, 120, 230),
+        Color::Magenta => (220, 80, 200),
+        Color::Yellow => (240, 210, 90),
+        Color::White => (230, 230, 230),
+        _ => (150, 150, 150),
     }
 }
 

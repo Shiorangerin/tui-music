@@ -1,0 +1,27 @@
+[package]
+name = "tui-music"
+version = "0.1.0"
+edition = "2021"
+authors = ["Shiorangerin <141531482+Shiorangerin@users.noreply.github.com>"]
+
+[lib]
+name = "tui_music"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tui-music"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+rodio = "0.20"
+rustfft = "6.2"
+anyhow = "1.0"
+walkdir = "2.5"
+lofty = "0.22"
+clap = { version = "4.5", features = ["derive"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"

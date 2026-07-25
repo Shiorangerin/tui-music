@@ -37,9 +37,9 @@ pub fn compute(samples: &[f32], num_bars: usize) -> Vec<f32> {
         }
     }
     // 第二遍：按本帧峰值归一化到 [0,1]，再用 gamma>1 压缩
-    const FLOOR_RATIO: f32 = 0.06; // 数值低于峰值的6%视为无声
-    const GAMMA: f32 = 2.0;
-    const HEADROOM: f32 = 0.85; // 峰值大约占 85% 高度，留出余量
+    const FLOOR_RATIO: f32 = 0.03; // 数值低于峰值的3%视为无声
+    const GAMMA: f32 = 1.2; // 接近线性，变化幅度跟原始信号紧
+    const HEADROOM: f32 = 1.0; // 峰值可到顶
     let mut out = vec![0.0f32; num_bars];
     for b in 0..num_bars {
         let r = mags[b] / peak; // [0, 1]

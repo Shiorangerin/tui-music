@@ -134,8 +134,8 @@ fn draw_spectrum(f: &mut Frame, app: &App, area: Rect) {
         }
         let cell = &mut f.buffer_mut()[(x, mid_y)];
         if cell.symbol() == " " {
-            cell.set_char('·');
-            cell.set_style(Style::default().fg(Color::Rgb(40, 42, 54)));
+            cell.set_char('─');
+            cell.set_style(Style::default().fg(Color::Rgb(60, 62, 80)));
         }
     }
 

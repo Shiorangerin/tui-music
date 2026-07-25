@@ -105,12 +105,15 @@ fn draw_spectrum(f: &mut Frame, app: &App, area: Rect) {
     let mid_y = inner.y + inner.height / 2;
     let half = (inner.height / 2) as f32;
 
-    // 中线
+    // 中线：稀疏暗点，融入背景
     for x in inner.x..inner.x + inner.width {
+        if (x - inner.x) % 3 != 0 {
+            continue;
+        }
         let cell = &mut f.buffer_mut()[(x, mid_y)];
         if cell.symbol() == " " {
             cell.set_char('·');
-            cell.set_style(Style::default().fg(Color::DarkGray));
+            cell.set_style(Style::default().fg(Color::Rgb(50, 50, 60)));
         }
     }
 

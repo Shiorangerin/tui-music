@@ -2,8 +2,9 @@ use rustfft::{num_complex::Complex, FftPlanner};
 
 pub const FFT_N: usize = 2048;
 
-/// Compute `num_bars` raw spectrum magnitudes in [0.0, 1.0] from the given mono samples.
-/// Bin assignment is log-frequency so low frequencies get more resolution.
+/// Compute `num_bars` raw spectrum magnitudes in [0.0, 1.0].
+/// Gamma-compressed so typical audio only fills the lower portion; only peaks reach the top.
+/// Log-frequency binning gives low frequencies more resolution.
 pub fn compute(samples: &[f32], num_bars: usize) -> Vec<f32> {
     let num_bars = num_bars.max(1);
     let mut input = [Complex::new(0.0, 0.0); FFT_N];
@@ -14,6 +15,10 @@ pub fn compute(samples: &[f32], num_bars: usize) -> Vec<f32> {
     let mut planner = FftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(FFT_N);
     fft.process(&mut input);
+
+    const GAIN: f32 = 1.6;
+    const FLOOR: f32 = 0.04;
+    const GAMMA: f32 = 0.42; // steep compression: low stays low, peaks stay tall
 
     let mut out = vec![0.0f32; num_bars];
     let max_k = (FFT_N / 2) as f32;
@@ -26,9 +31,8 @@ pub fn compute(samples: &[f32], num_bars: usize) -> Vec<f32> {
         for k in lo..hi {
             mag = mag.max(input[k].norm());
         }
-        // sqrt compression is gentler than tanh; noise floor subtracted
-        let level = (mag * 4.5).sqrt() - 0.05;
-        out[b] = level.clamp(0.0, 1.0);
+        let lin = (mag * GAIN - FLOOR).max(0.0);
+        out[b] = lin.powf(GAMMA).clamp(0.0, 1.0);
     }
     out
 }

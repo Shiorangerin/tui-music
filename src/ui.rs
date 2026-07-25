@@ -124,10 +124,13 @@ fn draw_spectrum(f: &mut Frame, app: &App, area: Rect) {
             .collect()
     };
 
-    // 中线：只在能量为 0 的列铺一个淡点；能量进来即被频谱接管，不再三条线
+    // 阈值：能量不足一格高的列视为静默，画中线点；有意义的能量列才画频谱
+    let bar_thresh = 1.0 / half;
+
+    // 中线：只在静默列铺一个淡点；有能量的列由频谱接管
     for (i, x) in (inner.x..inner.x + inner.width).enumerate() {
-        if i < v.len() && v[i] > 0.0 {
-            continue; // 该列有频谱，不画静线
+        if i < v.len() && v[i] > bar_thresh {
+            continue; // 该列有足够频谱能量，不画静线
         }
         let cell = &mut f.buffer_mut()[(x, mid_y)];
         if cell.symbol() == " " {
@@ -140,8 +143,8 @@ fn draw_spectrum(f: &mut Frame, app: &App, area: Rect) {
     // 关键：能量很小时 cull 掉一端（按整列偶数/奇数分布），避免稳态下两条平行线。
     for i in 0..cols {
         let energy = v[i].clamp(0.0, 1.0);
-        if energy <= 0.0 {
-            continue;
+        if energy < bar_thresh {
+            continue; // 能量太少，留中线
         }
         let h = energy * half;
         let full = h.floor() as i32;
@@ -162,7 +165,7 @@ fn draw_spectrum(f: &mut Frame, app: &App, area: Rect) {
             put_dot(f, x, y as u16, color, false);
             up += 1;
         }
-        if frac > 0.0 && up < half as i32 {
+        if frac > 0.0 && up < half as i32 && full >= 1 {
             let y = mid_y as i32 - 1 - up;
             if y >= inner.y as i32 {
                 put_dot(f, x, y as u16, color, true);
@@ -179,7 +182,7 @@ fn draw_spectrum(f: &mut Frame, app: &App, area: Rect) {
             put_dot(f, x, y as u16, color, false);
             dn += 1;
         }
-        if frac > 0.0 && dn < half as i32 {
+        if frac > 0.0 && dn < half as i32 && full >= 1 {
             let y = mid_y as i32 + 1 + dn;
             if y <= inner.bottom() as i32 - 1 {
                 put_dot(f, x, y as u16, color, true);

@@ -8,6 +8,7 @@ use tui_music::player::{Player, RepeatMode};
 pub struct App {
     pub music_dir: PathBuf,
     pub tracks: Vec<Track>,
+    pub display: Vec<usize>,
     pub selected: Option<usize>,
     pub current: Option<usize>,
     pub repeat: RepeatMode,
@@ -16,6 +17,8 @@ pub struct App {
     pub player: Player,
     pub bars: [u16; tui_music::viz::BARS],
     pub should_quit: bool,
+    pub search: String,
+    pub search_active: bool,
 }
 
 impl App {
@@ -25,9 +28,11 @@ impl App {
         } else {
             Vec::new()
         };
+        let display = (0..tracks.len()).collect();
         Ok(Self {
             music_dir,
             tracks,
+            display,
             selected: None,
             current: None,
             repeat: RepeatMode::All,
@@ -36,11 +41,63 @@ impl App {
             player: Player::new()?,
             bars: [0u16; tui_music::viz::BARS],
             should_quit: false,
+            search: String::new(),
+            search_active: false,
         })
     }
 
+    fn rebuild_display(&mut self) {
+        if self.search.is_empty() {
+            self.display = (0..self.tracks.len()).collect();
+        } else {
+            let q = self.search.to_lowercase();
+            self.display = self
+                .tracks
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| {
+                    t.display_name().to_lowercase().contains(&q)
+                        || t.subtitle().to_lowercase().contains(&q)
+                })
+                .map(|(i, _)| i)
+                .collect();
+        }
+        let n = self.display.len();
+        if n == 0 {
+            self.selected = None;
+        } else if self.selected.map_or(true, |s| s >= n) {
+            self.selected = Some(0);
+        }
+    }
+
+    pub fn enter_search(&mut self) {
+        self.search_active = true;
+    }
+
+    pub fn exit_search(&mut self, keep: bool) {
+        self.search_active = false;
+        if !keep {
+            self.search.clear();
+            self.rebuild_display();
+        }
+    }
+
+    pub fn search_push(&mut self, c: char) {
+        self.search.push(c);
+        self.rebuild_display();
+    }
+
+    pub fn search_pop(&mut self) {
+        self.search.pop();
+        self.rebuild_display();
+    }
+
+    fn orig_of(&self, view_i: usize) -> Option<usize> {
+        self.display.get(view_i).copied()
+    }
+
     pub fn selected_mut(&mut self, delta: i32) {
-        let n = self.tracks.len();
+        let n = self.display.len();
         if n == 0 {
             return;
         }
@@ -54,30 +111,32 @@ impl App {
     }
 
     pub fn play_selected(&mut self) -> anyhow::Result<()> {
-        if let Some(i) = self.selected {
-            self.play_track(i)?;
+        if let Some(v) = self.selected {
+            if let Some(o) = self.orig_of(v) {
+                self.play_track(o)?;
+                self.current = Some(v);
+            }
         }
         Ok(())
     }
 
-    pub fn play_track(&mut self, i: usize) -> anyhow::Result<()> {
-        if i >= self.tracks.len() {
+    pub fn play_track(&mut self, orig_i: usize) -> anyhow::Result<()> {
+        if orig_i >= self.tracks.len() {
             return Ok(());
         }
-        let path = self.tracks[i].path.clone();
+        let path = self.tracks[orig_i].path.clone();
         self.player.play_file(&path)?;
         self.player.set_volume(self.volume);
-        self.current = Some(i);
         Ok(())
     }
 
     pub fn next(&mut self) -> anyhow::Result<()> {
-        let n = self.tracks.len();
+        let n = self.display.len();
         if n == 0 {
             return Ok(());
         }
         let cur = self.current.unwrap_or(0);
-        let next_i = if self.shuffle {
+        let next_v = if self.shuffle {
             if n == 1 { 0 } else {
                 let r = (rand_next(n)) as usize;
                 if r == cur { (r + 1) % n } else { r }
@@ -85,18 +144,24 @@ impl App {
         } else {
             (cur + 1) % n
         };
-        self.play_track(next_i)?;
+        if let Some(o) = self.orig_of(next_v) {
+            self.play_track(o)?;
+            self.current = Some(next_v);
+        }
         Ok(())
     }
 
     pub fn prev(&mut self) -> anyhow::Result<()> {
-        let n = self.tracks.len();
+        let n = self.display.len();
         if n == 0 {
             return Ok(());
         }
         let cur = self.current.unwrap_or(0);
-        let prev_i = if cur == 0 { n - 1 } else { cur - 1 };
-        self.play_track(prev_i)?;
+        let prev_v = if cur == 0 { n - 1 } else { cur - 1 };
+        if let Some(o) = self.orig_of(prev_v) {
+            self.play_track(o)?;
+            self.current = Some(prev_v);
+        }
         Ok(())
     }
 
@@ -128,23 +193,24 @@ impl App {
     pub fn update(&mut self) -> anyhow::Result<()> {
         self.player.update_position();
 
-        if let Some(i) = self.current {
-            let d = self.tracks[i].duration;
-            let mut finished = self.player.is_finished();
-            if d > 0.0 && self.player.position.as_secs_f64() >= d && self.player.is_finished() {
-                finished = true;
-            }
-            if finished && self.player.playing {
-                self.player.playing = false;
-                match self.repeat {
-                    RepeatMode::One => {
-                        self.play_track(i)?;
-                    }
-                    _ => {
-                        if i + 1 < self.tracks.len() || matches!(self.repeat, RepeatMode::All) {
-                            self.next()?;
-                        } else {
-                            self.player.playing = false;
+        if let Some(v) = self.current {
+            if let Some(o) = self.orig_of(v) {
+                let d = self.tracks[o].duration;
+                let mut finished = self.player.is_finished();
+                if d > 0.0 && self.player.position.as_secs_f64() >= d && self.player.is_finished() {
+                    finished = true;
+                }
+                if finished && self.player.playing {
+                    self.player.playing = false;
+                    match self.repeat {
+                        RepeatMode::One => {
+                            self.play_track(o)?;
+                        }
+                        _ => {
+                            let n = self.display.len();
+                            if v + 1 < n || matches!(self.repeat, RepeatMode::All) {
+                                self.next()?;
+                            }
                         }
                     }
                 }
@@ -157,9 +223,20 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> anyhow::Result<()> {
+        if self.search_active {
+            match key.code {
+                KeyCode::Esc => self.exit_search(false),
+                KeyCode::Enter => self.exit_search(true),
+                KeyCode::Backspace => self.search_pop(),
+                KeyCode::Char(c) => self.search_push(c),
+                _ => {}
+            }
+            return Ok(());
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match (ctrl, key.code) {
             (false, KeyCode::Char('q') | KeyCode::Esc) => self.should_quit = true,
+            (false, KeyCode::Char('/')) | (false, KeyCode::Char('f')) => self.enter_search(),
             (false, KeyCode::Up | KeyCode::Char('k')) => self.selected_mut(-1),
             (false, KeyCode::Down | KeyCode::Char('j')) => self.selected_mut(1),
             (false, KeyCode::Enter) | (false, KeyCode::Char('l')) => self.play_selected()?,

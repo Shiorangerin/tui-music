@@ -15,18 +15,50 @@
 - 即时查找（search）：键入字符实时过滤歌名 / 艺术家
 - 进度条与当前曲目显示
 
-## 构建
+## 安装
+
+### 通过 Homebrew（推荐，macOS / Linuxbrew）
+
+本项目收录在作者个人 tap `orangerin/apps`，任何人都可直接安装：
+
+```sh
+brew tap orangerin/apps
+brew install tui-music
+```
+
+或一行不 tap 直接装：
+
+```sh
+brew install orangerin/apps/tui-music
+```
+
+arm64 macOS 用户会自动下载预编译 bottle，无需本地编译；其他平台会从源码 `cargo build`。
+
+升级：
+
+```sh
+brew upgrade tui-music
+```
+
+### 从源码构建
+
+需要 Rust 工具链（`rustup` 或 Homebrew 的 `rust`）。
 
 ```sh
 cargo build --release
 # 二进制位于 target/release/tui-music
 ```
 
+### 直接下载预编译二进制
+
+到 [Releases](https://github.com/Shiorangerin/tui-music/releases) 下载对应平台的二进制，放入 `PATH` 即可。
+
 ## 使用
 
 ```sh
-./target/release/tui-music                 # 扫描 ~/Music
-./target/release/tui-music -m /path/to/dir # 指定其他目录
+tui-music                                  # 扫描 ~/Music
+tui-music -m /path/to/dir                  # 指定其他目录
+./target/release/tui-music                 # 从源码构建后运行
 ```
 
 ## 快捷键

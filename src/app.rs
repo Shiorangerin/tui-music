@@ -15,7 +15,7 @@ pub struct App {
     pub shuffle: bool,
     pub volume: f32,
     pub player: Player,
-    pub bars: [u16; tui_music::viz::BARS],
+    pub bars: Vec<u16>,
     pub should_quit: bool,
     pub search: String,
     pub search_active: bool,
@@ -39,7 +39,7 @@ impl App {
             shuffle: false,
             volume: 0.6,
             player: Player::new()?,
-            bars: [0u16; tui_music::viz::BARS],
+            bars: Vec::new(),
             should_quit: false,
             search: String::new(),
             search_active: false,
@@ -190,7 +190,7 @@ impl App {
         self.player.set_volume(self.volume);
     }
 
-    pub fn update(&mut self) -> anyhow::Result<()> {
+    pub fn update(&mut self, num_bars: usize) -> anyhow::Result<()> {
         self.player.update_position();
 
         if let Some(v) = self.current {
@@ -218,7 +218,7 @@ impl App {
         }
 
         let samples = self.player.viz.latest(tui_music::viz::FFT_N);
-        self.bars = tui_music::viz::compute(&samples.clone());
+        self.bars = tui_music::viz::compute(&samples, num_bars.max(16));
         Ok(())
     }
 

@@ -65,7 +65,7 @@ fn run<B: ratatui::backend::Backend>(
             }
         }
 
-        app.update()?;
+        app.update(terminal.size()?.width.saturating_sub(2).max(16) as usize)?;
 
         if app.should_quit {
             break;

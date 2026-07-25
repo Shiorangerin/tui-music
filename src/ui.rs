@@ -14,8 +14,8 @@ pub fn draw(f: &mut Frame, app: &App) {
         .constraints([
             Constraint::Length(3),
             Constraint::Length(3),
-            Constraint::Min(8),
-            Constraint::Length(8),
+            Constraint::Min(6),
+            Constraint::Length(16),
             Constraint::Length(4),
         ])
         .split(f.area());
@@ -93,72 +93,135 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_spectrum(f: &mut Frame, app: &App, area: Rect) {
-    let inner = {
-        let block = Block::default().borders(Borders::ALL);
-        let r = block.inner(area);
-        f.render_widget(block, area);
-        r
-    };
+    let block = Block::default().borders(Borders::ALL);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
 
-    let bars = app.bars;
-    if bars.iter().all(|&v| v == 0) {
+    if app.bars.is_empty() {
         return;
     }
 
-    let cols = bars.len();
-    let cell_w = (inner.width as usize / cols.max(1)).max(1);
-    let max_bar = 20u16;
-    let height = inner.height as f32;
-    let bottom = inner.bottom();
+    let cols = app.bars.len();
+    let mid_y = inner.y + inner.height / 2;
+    let half = (inner.height / 2) as f32;
 
-    for i in 0..cols {
-        let v = bars[i].min(max_bar) as f32 / max_bar as f32;
-        let x = inner.x + (i * cell_w) as u16;
-        let top_y = bottom - ((v * height).round() as u16).max(1);
-        let ty = top_y.max(inner.y);
-        let frac = (v * height) - (bottom - 1 - ty) as f32;
-        let sub = if frac >= 0.875 {
-            8
-        } else if frac >= 0.75 {
-            7
-        } else if frac >= 0.625 {
-            6
-        } else if frac >= 0.5 {
-            5
-        } else if frac >= 0.375 {
-            4
-        } else if frac >= 0.25 {
-            3
-        } else if frac >= 0.125 {
-            2
-        } else {
-            1
-        };
-        let ch = sub_block(sub);
-
-        let freq = i as f32 / (cols - 1).max(1) as f32;
-        let color = if freq < 0.33 {
-            Color::Cyan
-        } else if freq < 0.66 {
-            Color::Magenta
-        } else {
-            Color::Yellow
-        };
-
-        if ty < bottom {
-            f.buffer_mut()
-                .set_string(x, ty, ch, Style::default().fg(color));
-        }
-    }
-
-    let axis_y = (inner.y + inner.height / 2).max(inner.y).min(bottom - 1);
-    for x in (inner.x..inner.x + inner.width).step_by(2) {
-        let cell = &mut f.buffer_mut()[(x, axis_y)];
+    // 中线
+    for x in inner.x..inner.x + inner.width {
+        let cell = &mut f.buffer_mut()[(x, mid_y)];
         if cell.symbol() == " " {
-            cell.set_char('.');
+            cell.set_char('·');
             cell.set_style(Style::default().fg(Color::DarkGray));
         }
     }
+
+    // 频谱：从中线上下镜像延伸，细线（每列一格宽）
+    let cell_w = (inner.width as usize / cols.max(1)).max(1);
+    for i in 0..cols {
+        let v = (app.bars[i] as f32).min(20.0) / 20.0;
+        let h = v * half;
+        let x = inner.x + (i * cell_w) as u16;
+
+        let freq = i as f32 / (cols - 1).max(1) as f32;
+        let color = spectrum_color(freq, v);
+
+        // 上半部分（从中线向上一格起算）
+        draw_bar_half(f, x, mid_y.saturating_sub(1), inner.y, h, true, color);
+        // 下半部分（从中线向下一格起算），镜像
+        draw_bar_half(f, x, mid_y + 1, inner.bottom() - 1, h, false, color);
+    }
+}
+
+fn spectrum_color(freq: f32, intensity: f32) -> Color {
+    // 频率渐变 + 强度提亮
+    let base = if freq < 0.5 {
+        // 低频：青 -> 蓝
+        let t = freq * 2.0;
+        blend(Color::Cyan, Color::Blue, t)
+    } else {
+        // 高频：品红 -> 黄
+        let t = (freq - 0.5) * 2.0;
+        blend(Color::Magenta, Color::Yellow, t)
+    };
+    if intensity > 0.7 {
+        blend(base, Color::White, 0.25)
+    } else {
+        base
+    }
+}
+
+fn blend(a: Color, b: Color, t: f32) -> Color {
+    let t = t.clamp(0.0, 1.0);
+    let (ar, ag, ab) = to_rgb(a);
+    let (br, bg, bb) = to_rgb(b);
+    let r = (ar as f32 * (1.0 - t) + br as f32 * t) as u8;
+    let g = (ag as f32 * (1.0 - t) + bg as f32 * t) as u8;
+    let bch = (ab as f32 * (1.0 - t) + bb as f32 * t) as u8;
+    Color::Rgb(r, g, bch)
+}
+
+fn to_rgb(c: Color) -> (u8, u8, u8) {
+    match c {
+        Color::Cyan => (0, 255, 255),
+        Color::Blue => (0, 120, 255),
+        Color::Magenta => (255, 0, 255),
+        Color::Yellow => (255, 255, 0),
+        Color::White => (255, 255, 255),
+        _ => (180, 180, 180),
+    }
+}
+
+/// 画从 `start_y` 沿 `direction` 方向（上为 true，下为 false）延伸 `h` 个单位的细线。
+/// `bound` 是该方向上的不可逾越边界（向上画时是顶边 inner.y，向下画时是底边）。
+fn draw_bar_half(
+    f: &mut Frame,
+    x: u16,
+    start_y: u16,
+    bound: u16,
+    h: f32,
+    upward: bool,
+    color: Color,
+) {
+    if h <= 0.0 {
+        return;
+    }
+    let full = h.floor() as u16;
+    let frac = h - full as f32;
+
+    let mut y = start_y;
+    for k in 0..full {
+        if upward {
+            if y < bound {
+                break;
+            }
+        } else if y > bound {
+            break;
+        }
+        put(f, x, y, "█", color);
+        if upward {
+            if y == 0 {
+                break;
+            }
+            y = y - 1;
+        } else {
+            y = y + 1;
+        }
+        let _ = k;
+    }
+
+    // 顶端/底端 sub-block 平滑收尾
+    if frac > 0.0 {
+        let level = ((frac * 8.0).ceil() as u8).clamp(1, 8);
+        let ch = sub_block(level);
+        if upward && y >= bound {
+            put(f, x, y, ch, color);
+        } else if !upward && y <= bound {
+            put(f, x, y, ch, color);
+        }
+    }
+}
+
+fn put(f: &mut Frame, x: u16, y: u16, s: &str, color: Color) {
+    f.buffer_mut().set_string(x, y, s, Style::default().fg(color));
 }
 
 fn sub_block(level: u8) -> &'static str {

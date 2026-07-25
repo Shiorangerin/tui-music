@@ -14,8 +14,8 @@ pub fn draw(f: &mut Frame, app: &App) {
         .constraints([
             Constraint::Length(3),
             Constraint::Length(3),
-            Constraint::Length(8),
-            Constraint::Min(8),
+            Constraint::Min(6),
+            Constraint::Length(16),
             Constraint::Length(4),
         ])
         .split(f.area());
@@ -93,7 +93,9 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_spectrum(f: &mut Frame, app: &App, area: Rect) {
-    let inner = area;
+    let block = Block::default().borders(Borders::ALL);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
 
     // 每列一格宽、列数 = inner.width，保证填满整宽
     let cols = inner.width as usize;

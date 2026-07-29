@@ -28,7 +28,8 @@ impl Track {
         if self.artist.is_empty() {
             self.path
                 .parent()
-                .map(|p| p.to_string_lossy().to_string())
+                .and_then(|p| p.file_name())
+                .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_default()
         } else {
             self.artist.clone()
@@ -88,7 +89,19 @@ fn load(p: &Path) -> anyhow::Result<Track> {
 }
 
 pub fn default_music_dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(|h| PathBuf::from(h).join("Music"))
-        .unwrap_or_else(|| PathBuf::from("/Users/orangerin/Music"))
+    if let Some(dir) = dirs_fallback() {
+        return dir;
+    }
+    PathBuf::from(".")
+}
+
+fn dirs_fallback() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var_os("USERPROFILE").map(|h| PathBuf::from(h).join("Music"))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Music"))
+    }
 }

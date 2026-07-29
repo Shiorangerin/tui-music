@@ -64,7 +64,12 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         " tui-music ",
         Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
     );
-    let dir = Span::raw(format!("  dir: {}", app.music_dir.display()));
+    let inner_w = area.width.saturating_sub(2);
+    let dir = if inner_w >= 35 {
+        Span::raw(format!("  dir: {}", app.music_dir.display()))
+    } else {
+        Span::raw("")
+    };
     let line = Line::from(vec![title, dir]);
     let block = Block::default().borders(Borders::ALL).title(line);
     f.render_widget(block, area);
@@ -81,8 +86,16 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
     } else {
         Span::raw("")
     };
-    let hits = Span::raw(format!("   [{} / {}]", app.display.len(), app.tracks.len()));
-    let line = Line::from(vec![label, query, cursor, hits]);
+    let inner_w = area.width.saturating_sub(2);
+    let mut parts = vec![label, query, cursor];
+    if inner_w >= 35 {
+        parts.push(Span::raw(format!(
+            "   [{} / {}]",
+            app.display.len(),
+            app.tracks.len()
+        )));
+    }
+    let line = Line::from(parts);
     let block = Block::default().borders(Borders::ALL);
     let p = Paragraph::new(line).block(block);
     f.render_widget(p, area);
@@ -297,23 +310,45 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     };
     let pct = pct.clamp(0.0, 1.0);
 
-    let vol_s = format!("   volume: {}%", (app.volume * 100.0) as i32);
-    let pos_s = format!("   pos: {} /", pos);
-    let dur_s = format!(" {}", fmt_secs(cur_dur));
-    let now_s = format!("   now: {}", name);
-    let status = Line::from(vec![
-        Span::styled(" state ", Style::default().fg(Color::DarkGray)),
-        Span::raw(": "),
-        Span::styled(st.to_string(), Style::default().fg(Color::Green)),
-        Span::raw("   repeat: "),
-        Span::styled(rep.to_string(), Style::default().fg(Color::Cyan)),
-        Span::raw("   shuffle: "),
-        Span::styled(shuf.to_string(), Style::default().fg(Color::Cyan)),
-        Span::raw(vol_s),
-        Span::raw(pos_s),
-        Span::raw(dur_s),
-        Span::raw(now_s),
-    ]);
+    let inner_w = area.width.saturating_sub(2);
+    let status = if inner_w >= 70 {
+        Line::from(vec![
+            Span::styled(" state ", Style::default().fg(Color::DarkGray)),
+            Span::raw(": "),
+            Span::styled(st.to_string(), Style::default().fg(Color::Green)),
+            Span::raw("   repeat: "),
+            Span::styled(rep.to_string(), Style::default().fg(Color::Cyan)),
+            Span::raw("   shuffle: "),
+            Span::styled(shuf.to_string(), Style::default().fg(Color::Cyan)),
+            Span::raw(format!("   volume: {}%", (app.volume * 100.0) as i32)),
+            Span::raw(format!("   pos: {} /", pos)),
+            Span::raw(format!(" {}", fmt_secs(cur_dur))),
+            Span::raw(format!("   now: {}", name)),
+        ])
+    } else if inner_w >= 45 {
+        Line::from(vec![
+            Span::styled(" state ", Style::default().fg(Color::DarkGray)),
+            Span::raw(": "),
+            Span::styled(st.to_string(), Style::default().fg(Color::Green)),
+            Span::raw("   rpt: "),
+            Span::styled(rep.to_string(), Style::default().fg(Color::Cyan)),
+            Span::raw("   shf: "),
+            Span::styled(shuf.to_string(), Style::default().fg(Color::Cyan)),
+            Span::raw(format!("   vol:{}%", (app.volume * 100.0) as i32)),
+            Span::raw(format!("   {}/", pos)),
+            Span::raw(fmt_secs(cur_dur)),
+            Span::raw(format!("   {}", name)),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled(st.to_string(), Style::default().fg(Color::Green)),
+            Span::raw(" | rpt:"),
+            Span::styled(rep.to_string(), Style::default().fg(Color::Cyan)),
+            Span::raw(format!(" | {}/", pos)),
+            Span::raw(fmt_secs(cur_dur)),
+            Span::raw(format!(" | {}", name)),
+        ])
+    };
 
     let bar_w = area.width.saturating_sub(2) as usize;
     let filled = (pct * bar_w as f64) as usize;

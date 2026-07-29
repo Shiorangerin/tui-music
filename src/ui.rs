@@ -11,13 +11,7 @@ use tui_music::player::RepeatMode;
 pub fn draw(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Min(6),
-            Constraint::Length(16),
-            Constraint::Length(4),
-        ])
+        .constraints(layout_constraints(f.area().height))
         .split(f.area());
 
     draw_header(f, app, chunks[0]);
@@ -27,7 +21,45 @@ pub fn draw(f: &mut Frame, app: &App) {
     draw_footer(f, app, chunks[4]);
 }
 
+fn layout_constraints(h: u16) -> Vec<Constraint> {
+    if h >= 28 {
+        return vec![
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Min(6),
+            Constraint::Length(16),
+            Constraint::Length(4),
+        ];
+    }
+    if h >= 14 {
+        let fixed = 10u16;
+        let rem = h.saturating_sub(fixed);
+        let spec = (rem as f32 * 0.4).ceil() as u16;
+        let spec = spec.max(2);
+        let list = rem.saturating_sub(spec).max(2);
+        return vec![
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Length(list),
+            Constraint::Length(spec),
+            Constraint::Length(4),
+        ];
+    }
+    let footer_h = h.min(3).max(1);
+    let list_h = h.saturating_sub(footer_h).max(1);
+    vec![
+        Constraint::Length(0),
+        Constraint::Length(0),
+        Constraint::Length(list_h),
+        Constraint::Length(0),
+        Constraint::Length(footer_h),
+    ]
+}
+
 fn draw_header(f: &mut Frame, app: &App, area: Rect) {
+    if area.height < 3 || area.width == 0 {
+        return;
+    }
     let title = Span::styled(
         " tui-music ",
         Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
@@ -39,6 +71,9 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_search(f: &mut Frame, app: &App, area: Rect) {
+    if area.height < 3 || area.width == 0 {
+        return;
+    }
     let label = Span::styled(" search ", Style::default().fg(Color::Yellow));
     let query = Span::raw(format!("  {}", app.search));
     let cursor = if app.search_active {
@@ -54,6 +89,9 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_list(f: &mut Frame, app: &App, area: Rect) {
+    if area.height < 3 || area.width == 0 {
+        return;
+    }
     let block = Block::default()
         .borders(Borders::ALL)
         .title(Span::styled(
@@ -93,16 +131,24 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_spectrum(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default().borders(Borders::ALL);
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    if area.height < 2 || area.width == 0 {
+        return;
+    }
+    let use_border = area.height >= 5;
+    let inner = if use_border {
+        let block = Block::default().borders(Borders::ALL);
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+        inner
+    } else {
+        area
+    };
 
-    // 每列一格宽、列数 = inner.width，保证填满整宽
     let cols = inner.width as usize;
     if cols == 0 {
         return;
     }
-    let max_h = inner.height as i32; // 总可用高度
+    let max_h = inner.height as i32;
 
     // 重采样 smoothed 到 cols 列
     let src = &app.smoothed;
@@ -221,6 +267,9 @@ fn to_rgb(c: Color) -> (u8, u8, u8) {
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
     let rep = match app.repeat {
         RepeatMode::Off => "Off",
         RepeatMode::One => "One",
@@ -281,8 +330,20 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         ),
     ]);
 
+    let inner_h = area.height.saturating_sub(2);
+    let mut lines = Vec::new();
+    if inner_h >= 1 {
+        lines.push(status);
+    }
+    if inner_h >= 2 {
+        lines.push(progress_line);
+    }
+    if inner_h >= 3 {
+        lines.push(help);
+    }
+
     let block = Block::default().borders(Borders::ALL);
-    let para = Paragraph::new(vec![status, progress_line, help]).block(block);
+    let para = Paragraph::new(lines).block(block);
     f.render_widget(para, area);
 }
 

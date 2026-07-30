@@ -12,6 +12,12 @@ pub struct Track {
     pub duration: f64,
 }
 
+#[derive(Clone)]
+pub struct Playlist {
+    pub name: String,
+    pub tracks: Vec<Track>,
+}
+
 impl Track {
     pub fn display_name(&self) -> String {
         if self.title.is_empty() {
@@ -47,25 +53,101 @@ pub fn is_audio(p: &Path) -> bool {
     EXTENSIONS.contains(&e.as_str())
 }
 
-pub fn scan(root: &Path) -> Vec<Track> {
-    let mut tracks = Vec::new();
+const PLAYLIST_MARKER: &str = "歌单";
+const DEFAULT_PLAYLIST: &str = "歌曲架";
+
+fn playlist_name(dir_name: &str) -> String {
+    let stripped = dir_name.strip_suffix(PLAYLIST_MARKER).unwrap_or(dir_name);
+    let stripped = stripped.trim();
+    if stripped.is_empty() {
+        dir_name.to_string()
+    } else {
+        stripped.to_string()
+    }
+}
+
+pub fn scan(root: &Path) -> Vec<Playlist> {
+    let mut playlist_dirs: Vec<(String, PathBuf)> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if !p.is_dir() {
+                continue;
+            }
+            let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            if name.contains(PLAYLIST_MARKER) {
+                playlist_dirs.push((playlist_name(&name), p));
+            }
+        }
+    }
+    playlist_dirs.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut playlist_tracks: Vec<Vec<Track>> = vec![Vec::new(); playlist_dirs.len()];
+    let mut shelf_tracks: Vec<Track> = Vec::new();
+
     for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
         let p = entry.path();
         if !p.is_file() || !is_audio(p) {
             continue;
         }
-        match load(p) {
-            Ok(t) => tracks.push(t),
-            Err(_) => tracks.push(Track {
-                path: p.to_path_buf(),
-                title: String::new(),
-                artist: String::new(),
-                duration: 0.0,
-            }),
+
+        let mut assigned = false;
+        for (i, (_, dir)) in playlist_dirs.iter().enumerate() {
+            if p.starts_with(dir) {
+                let track = load_or_fallback(p);
+                playlist_tracks[i].push(track);
+                assigned = true;
+                break;
+            }
+        }
+        if !assigned {
+            let track = load_or_fallback(p);
+            shelf_tracks.push(track);
         }
     }
-    tracks.sort_by(|a, b| a.display_name().to_lowercase().cmp(&b.display_name().to_lowercase()));
-    tracks
+
+    for tracks in playlist_tracks.iter_mut() {
+        tracks.sort_by(|a, b| a.display_name().to_lowercase().cmp(&b.display_name().to_lowercase()));
+    }
+    shelf_tracks.sort_by(|a, b| a.display_name().to_lowercase().cmp(&b.display_name().to_lowercase()));
+
+    let shelf_empty = shelf_tracks.is_empty();
+
+    let mut playlists: Vec<Playlist> = Vec::new();
+
+    let shelf = Playlist {
+        name: DEFAULT_PLAYLIST.to_string(),
+        tracks: shelf_tracks,
+    };
+    playlists.push(shelf);
+
+    for (i, (name, _)) in playlist_dirs.iter().enumerate() {
+        if playlist_tracks[i].is_empty() {
+            continue;
+        }
+        playlists.push(Playlist {
+            name: name.clone(),
+            tracks: std::mem::take(&mut playlist_tracks[i]),
+        });
+    }
+
+    if shelf_empty && playlists.len() == 1 {
+        playlists.clear();
+    }
+
+    playlists
+}
+
+fn load_or_fallback(p: &Path) -> Track {
+    match load(p) {
+        Ok(t) => t,
+        Err(_) => Track {
+            path: p.to_path_buf(),
+            title: String::new(),
+            artist: String::new(),
+            duration: 0.0,
+        },
+    }
 }
 
 fn load(p: &Path) -> anyhow::Result<Track> {

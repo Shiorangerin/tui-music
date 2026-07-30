@@ -29,7 +29,7 @@ fn main() -> anyhow::Result<()> {
         .unwrap_or_else(tui_music::library::default_music_dir);
 
     let mut app = app::App::new(music_dir)?;
-    if !app.tracks.is_empty() {
+    if !app.playlists.is_empty() && !app.active_tracks().is_empty() {
         app.selected = Some(0);
     }
 

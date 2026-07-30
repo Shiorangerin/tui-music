@@ -14,40 +14,60 @@ pub fn draw(f: &mut Frame, app: &App) {
         .constraints(layout_constraints(f.area().height))
         .split(f.area());
 
-    draw_header(f, app, chunks[0]);
-    draw_search(f, app, chunks[1]);
-    draw_list(f, app, chunks[2]);
-    draw_spectrum(f, app, chunks[3]);
-    draw_footer(f, app, chunks[4]);
+    let (header_idx, tabs_idx, search_idx, list_idx, spec_idx, footer_idx) =
+        if chunks.len() >= 6 {
+            (0, 1, 2, 3, 4, 5)
+        } else {
+            (0, chunks.len(), 1, 2, chunks.len(), chunks.len().saturating_sub(1))
+        };
+
+    draw_header(f, app, chunks[header_idx]);
+    if tabs_idx < chunks.len() {
+        draw_tabs(f, app, chunks[tabs_idx]);
+    }
+    if search_idx < chunks.len() {
+        draw_search(f, app, chunks[search_idx]);
+    }
+    if list_idx < chunks.len() {
+        draw_list(f, app, chunks[list_idx]);
+    }
+    if spec_idx < chunks.len() {
+        draw_spectrum(f, app, chunks[spec_idx]);
+    }
+    let fi = footer_idx.min(chunks.len().saturating_sub(1));
+    draw_footer(f, app, chunks[fi]);
 }
 
 fn layout_constraints(h: u16) -> Vec<Constraint> {
-    if h >= 28 {
+    if h >= 33 {
         return vec![
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Min(6),
-            Constraint::Length(16),
-            Constraint::Length(4),
+            Constraint::Length(3),  // header
+            Constraint::Length(1),  // tabs
+            Constraint::Length(3),  // search
+            Constraint::Min(6),     // list
+            Constraint::Length(16), // spectrum
+            Constraint::Length(4),  // footer
         ];
     }
-    if h >= 14 {
-        let fixed = 10u16;
+    if h >= 15 {
+        let fixed = 11u16;
         let rem = h.saturating_sub(fixed);
         let spec = (rem as f32 * 0.4).ceil() as u16;
         let spec = spec.max(2);
         let list = rem.saturating_sub(spec).max(2);
         return vec![
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Length(list),
-            Constraint::Length(spec),
-            Constraint::Length(4),
+            Constraint::Length(3),     // header
+            Constraint::Length(1),     // tabs
+            Constraint::Length(3),     // search
+            Constraint::Length(list),  // list
+            Constraint::Length(spec),  // spectrum
+            Constraint::Length(4),     // footer
         ];
     }
     let footer_h = h.min(3).max(1);
     let list_h = h.saturating_sub(footer_h).max(1);
     vec![
+        Constraint::Length(0),
         Constraint::Length(0),
         Constraint::Length(0),
         Constraint::Length(list_h),
@@ -75,6 +95,29 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(block, area);
 }
 
+fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
+    if area.height == 0 || area.width == 0 || app.playlists.is_empty() {
+        return;
+    }
+    let mut spans: Vec<Span> = Vec::new();
+    for (i, pl) in app.playlists.iter().enumerate() {
+        let is_active = i == app.active_playlist;
+        let style = if is_active {
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        let marker = if is_active { "▶" } else { " " };
+        spans.push(Span::styled(
+            format!("[{} {} ({})] ", marker, pl.name, pl.tracks.len()),
+            style,
+        ));
+    }
+    let line = Line::from(spans);
+    let block = Block::default();
+    f.render_widget(Paragraph::new(line).block(block), area);
+}
+
 fn draw_search(f: &mut Frame, app: &App, area: Rect) {
     if area.height < 3 || area.width == 0 {
         return;
@@ -89,10 +132,11 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
     let inner_w = area.width.saturating_sub(2);
     let mut parts = vec![label, query, cursor];
     if inner_w >= 35 {
+        let active_total = app.active_tracks().len();
         parts.push(Span::raw(format!(
             "   [{} / {}]",
             app.display.len(),
-            app.tracks.len()
+            active_total
         )));
     }
     let line = Line::from(parts);
@@ -105,10 +149,15 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
     if area.height < 3 || area.width == 0 {
         return;
     }
+    let pl_name = app
+        .playlists
+        .get(app.active_playlist)
+        .map(|p| p.name.as_str())
+        .unwrap_or("???");
     let block = Block::default()
         .borders(Borders::ALL)
         .title(Span::styled(
-            format!(" playlist ({}) ", app.display.len()),
+            format!(" {} ({}) ", pl_name, app.display.len()),
             Style::default().fg(Color::Cyan),
         ));
     let items: Vec<ListItem> = app
@@ -116,7 +165,8 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
         .iter()
         .enumerate()
         .map(|(view_i, &orig)| {
-            let t = &app.tracks[orig];
+            let tracks = app.active_tracks();
+            let t = &tracks[orig];
             let is_cur = Some(view_i) == app.current;
             let marker = if is_cur { ">" } else { " " };
             let name = t.display_name();
@@ -163,7 +213,6 @@ fn draw_spectrum(f: &mut Frame, app: &App, area: Rect) {
     }
     let max_h = inner.height as i32;
 
-    // 重采样 smoothed 到 cols 列
     let src = &app.smoothed;
     let v: Vec<f32> = if src.is_empty() {
         vec![0.0; cols]
@@ -181,7 +230,6 @@ fn draw_spectrum(f: &mut Frame, app: &App, area: Rect) {
             .collect()
     };
 
-    // 底线：整行实线
     let bottom = inner.bottom() - 1;
     for x in inner.x..inner.x + inner.width {
         let cell = &mut f.buffer_mut()[(x, bottom)];
@@ -189,10 +237,8 @@ fn draw_spectrum(f: &mut Frame, app: &App, area: Rect) {
         cell.set_style(Style::default().fg(Color::Rgb(60, 62, 80)));
     }
 
-    // 阈值：能量不足一格高的列视作静默
     let bar_thresh = 1.0 / max_h as f32;
 
-    // 柱子：从底线上方一格向上画密集小点
     for i in 0..cols {
         let energy = v[i].clamp(0.0, 1.0);
         if energy < bar_thresh {
@@ -207,7 +253,7 @@ fn draw_spectrum(f: &mut Frame, app: &App, area: Rect) {
 
         let x = inner.x + i as u16;
         let top = inner.y as i32;
-        let base = bottom as i32 - 1; // 底线上方一格起步
+        let base = bottom as i32 - 1;
 
         let mut drawn = 0i32;
         while drawn < full {
@@ -218,7 +264,6 @@ fn draw_spectrum(f: &mut Frame, app: &App, area: Rect) {
             put_dot(f, x, y as u16, color, false);
             drawn += 1;
         }
-        // 顶端 1/8 像素精度半点收尾（仅当已有整格才画，避免恒底座）
         if frac > 0.0 && full >= 1 {
             let y = base - drawn;
             if y >= top {
@@ -294,7 +339,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
 
     let (cur_dur, name) = if let Some(v) = app.current {
         if let Some(o) = app.display.get(v) {
-            let t = &app.tracks[*o];
+            let tracks = app.active_tracks();
+            let t = &tracks[*o];
             (t.duration, t.display_name())
         } else {
             (0.0, "None".to_string())
@@ -360,7 +406,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
 
     let help = Line::from(vec![
         Span::styled(
-            " f/find  j/k move  enter play  space pause  n/p next/prev  r repeat  s shuffle  +/- vol  q quit ",
+            " f/find  j/k move  enter play  space pause  n/p next/prev  r repeat  s shuffle  +/- vol  [/] playlist  q quit ",
             Style::default().fg(Color::DarkGray),
         ),
     ]);

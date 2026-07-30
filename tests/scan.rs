@@ -15,7 +15,12 @@ fn scans_generated_sample_dir() {
     if !dir.exists() {
         return;
     }
-    let tracks = scan(&dir);
-    assert!(tracks.len() >= 2);
-    assert!(tracks.iter().any(|t| t.path.extension().unwrap_or_default() == "mp3"));
+    let playlists = scan(&dir);
+    assert!(!playlists.is_empty());
+    let total: usize = playlists.iter().map(|p| p.tracks.len()).sum();
+    assert!(total >= 2);
+    let has_mp3 = playlists.iter().any(|p| {
+        p.tracks.iter().any(|t| t.path.extension().unwrap_or_default() == "mp3")
+    });
+    assert!(has_mp3);
 }

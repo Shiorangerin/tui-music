@@ -2,12 +2,13 @@ use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use tui_music::library::{scan, Track};
+use tui_music::library::{scan, Playlist, Track};
 use tui_music::player::{Player, RepeatMode};
 
 pub struct App {
     pub music_dir: PathBuf,
-    pub tracks: Vec<Track>,
+    pub playlists: Vec<Playlist>,
+    pub active_playlist: usize,
     pub display: Vec<usize>,
     pub selected: Option<usize>,
     pub current: Option<usize>,
@@ -24,15 +25,23 @@ pub struct App {
 
 impl App {
     pub fn new(music_dir: PathBuf) -> anyhow::Result<Self> {
-        let tracks = if music_dir.exists() {
+        let playlists = if music_dir.exists() {
             scan(&music_dir)
         } else {
             Vec::new()
         };
-        let display = (0..tracks.len()).collect();
+        let active = playlists
+            .iter()
+            .position(|p| !p.tracks.is_empty())
+            .unwrap_or(0);
+        let display = playlists
+            .get(active)
+            .map(|pl| (0..pl.tracks.len()).collect())
+            .unwrap_or_default();
         Ok(Self {
             music_dir,
-            tracks,
+            playlists,
+            active_playlist: active,
             display,
             selected: None,
             current: None,
@@ -48,13 +57,37 @@ impl App {
         })
     }
 
+    pub fn active_tracks(&self) -> &[Track] {
+        self.playlists
+            .get(self.active_playlist)
+            .map(|p| p.tracks.as_slice())
+            .unwrap_or(&[])
+    }
+
+    pub fn switch_playlist(&mut self, delta: i32) {
+        let n = self.playlists.len();
+        if n <= 1 {
+            return;
+        }
+        let cur = self.active_playlist as i32;
+        let mut next = cur + delta;
+        while next < 0 {
+            next += n as i32;
+        }
+        let next = (next as usize) % n;
+        self.active_playlist = next;
+        self.current = None;
+        self.search.clear();
+        self.rebuild_display();
+    }
+
     fn rebuild_display(&mut self) {
+        let tracks = self.active_tracks();
         if self.search.is_empty() {
-            self.display = (0..self.tracks.len()).collect();
+            self.display = (0..tracks.len()).collect();
         } else {
             let q = self.search.to_lowercase();
-            self.display = self
-                .tracks
+            self.display = tracks
                 .iter()
                 .enumerate()
                 .filter(|(_, t)| {
@@ -122,11 +155,12 @@ impl App {
         Ok(())
     }
 
-    pub fn play_track(&mut self, orig_i: usize) -> anyhow::Result<()> {
-        if orig_i >= self.tracks.len() {
+    pub fn play_track(&mut self, playlist_track_i: usize) -> anyhow::Result<()> {
+        let tracks = self.active_tracks();
+        if playlist_track_i >= tracks.len() {
             return Ok(());
         }
-        let path = self.tracks[orig_i].path.clone();
+        let path = tracks[playlist_track_i].path.clone();
         self.player.play_file(&path)?;
         self.player.set_volume(self.volume);
         Ok(())
@@ -197,7 +231,6 @@ impl App {
             self.smoothed = raw.clone();
             return;
         }
-        // aggressive attack, moderate release => snappy response, quick decay
         const ATTACK: f32 = 0.7;
         const RELEASE: f32 = 0.25;
         for (i, &r) in raw.iter().enumerate() {
@@ -212,7 +245,8 @@ impl App {
 
         if let Some(v) = self.current {
             if let Some(o) = self.orig_of(v) {
-                let d = self.tracks[o].duration;
+                let tracks = self.active_tracks();
+                let d = tracks[o].duration;
                 let mut finished = self.player.is_finished();
                 if d > 0.0 && self.player.position.as_secs_f64() >= d && self.player.is_finished() {
                     finished = true;
@@ -256,6 +290,8 @@ impl App {
         match (ctrl, key.code) {
             (false, KeyCode::Char('q') | KeyCode::Esc) => self.should_quit = true,
             (false, KeyCode::Char('/')) | (false, KeyCode::Char('f')) => self.enter_search(),
+            (false, KeyCode::Char('[')) => self.switch_playlist(-1),
+            (false, KeyCode::Char(']')) => self.switch_playlist(1),
             (false, KeyCode::Up | KeyCode::Char('k')) => self.selected_mut(-1),
             (false, KeyCode::Down | KeyCode::Char('j')) => self.selected_mut(1),
             (false, KeyCode::Enter) | (false, KeyCode::Char('l')) => self.play_selected()?,

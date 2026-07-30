@@ -14,60 +14,40 @@ pub fn draw(f: &mut Frame, app: &App) {
         .constraints(layout_constraints(f.area().height))
         .split(f.area());
 
-    let (header_idx, tabs_idx, search_idx, list_idx, spec_idx, footer_idx) =
-        if chunks.len() >= 6 {
-            (0, 1, 2, 3, 4, 5)
-        } else {
-            (0, chunks.len(), 1, 2, chunks.len(), chunks.len().saturating_sub(1))
-        };
-
-    draw_header(f, app, chunks[header_idx]);
-    if tabs_idx < chunks.len() {
-        draw_tabs(f, app, chunks[tabs_idx]);
-    }
-    if search_idx < chunks.len() {
-        draw_search(f, app, chunks[search_idx]);
-    }
-    if list_idx < chunks.len() {
-        draw_list(f, app, chunks[list_idx]);
-    }
-    if spec_idx < chunks.len() {
-        draw_spectrum(f, app, chunks[spec_idx]);
-    }
-    let fi = footer_idx.min(chunks.len().saturating_sub(1));
-    draw_footer(f, app, chunks[fi]);
+    draw_header(f, app, chunks[0]);
+    draw_search(f, app, chunks[1]);
+    draw_list(f, app, chunks[2]);
+    draw_spectrum(f, app, chunks[3]);
+    draw_footer(f, app, chunks[4]);
 }
 
 fn layout_constraints(h: u16) -> Vec<Constraint> {
-    if h >= 33 {
+    if h >= 32 {
         return vec![
-            Constraint::Length(3),  // header
-            Constraint::Length(1),  // tabs
+            Constraint::Length(3),  // header（含歌单标签）
             Constraint::Length(3),  // search
             Constraint::Min(6),     // list
             Constraint::Length(16), // spectrum
-            Constraint::Length(4),  // footer
+            Constraint::Length(4),   // footer
         ];
     }
-    if h >= 15 {
-        let fixed = 11u16;
+    if h >= 14 {
+        let fixed = 10u16;
         let rem = h.saturating_sub(fixed);
         let spec = (rem as f32 * 0.4).ceil() as u16;
         let spec = spec.max(2);
         let list = rem.saturating_sub(spec).max(2);
         return vec![
-            Constraint::Length(3),     // header
-            Constraint::Length(1),     // tabs
-            Constraint::Length(3),     // search
-            Constraint::Length(list),  // list
-            Constraint::Length(spec),  // spectrum
-            Constraint::Length(4),     // footer
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Length(list),
+            Constraint::Length(spec),
+            Constraint::Length(4),
         ];
     }
     let footer_h = h.min(3).max(1);
     let list_h = h.saturating_sub(footer_h).max(1);
     vec![
-        Constraint::Length(0),
         Constraint::Length(0),
         Constraint::Length(0),
         Constraint::Length(list_h),
@@ -90,13 +70,12 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     } else {
         Span::raw("")
     };
-    let line = Line::from(vec![title, dir]);
-    let block = Block::default().borders(Borders::ALL).title(line);
+    let title_line = Line::from(vec![title, dir]);
+    let block = Block::default().borders(Borders::ALL).title(title_line);
+    let inner = block.inner(area);
     f.render_widget(block, area);
-}
 
-fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
-    if area.height == 0 || area.width == 0 || app.playlists.is_empty() {
+    if inner.height == 0 || app.playlists.is_empty() {
         return;
     }
     let mut spans: Vec<Span> = Vec::new();
@@ -105,7 +84,7 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
         let style = if is_active {
             Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::Gray)
+            Style::default().fg(Color::DarkGray)
         };
         let marker = if is_active { "▶" } else { " " };
         spans.push(Span::styled(
@@ -113,9 +92,8 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
             style,
         ));
     }
-    let line = Line::from(spans);
-    let block = Block::default();
-    f.render_widget(Paragraph::new(line).block(block), area);
+    let tabs_line = Line::from(spans);
+    f.render_widget(Paragraph::new(tabs_line), inner);
 }
 
 fn draw_search(f: &mut Frame, app: &App, area: Rect) {

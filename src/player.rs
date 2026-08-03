@@ -5,31 +5,60 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// Ring buffer of recent PCM samples (mono mix) for visualization.
+/// O(1) circular buffer of recent PCM samples (mono mix) for visualization.
 #[derive(Clone)]
 pub struct VizBuffer {
-    inner: Arc<Mutex<Vec<f32>>>,
-    capacity: usize,
+    inner: Arc<Mutex<VizRing>>,
+}
+
+struct VizRing {
+    buf: Vec<f32>,
+    head: usize,
+    len: usize,
+}
+
+impl VizRing {
+    fn new(capacity: usize) -> Self {
+        Self { buf: vec![0.0; capacity], head: 0, len: 0 }
+    }
+
+    fn push(&mut self, s: f32) {
+        let cap = self.buf.len();
+        if self.len < cap {
+            self.buf[(self.head + self.len) % cap] = s;
+            self.len += 1;
+        } else {
+            self.buf[self.head] = s;
+            self.head = (self.head + 1) % cap;
+        }
+    }
+
+    fn latest(&self, n: usize) -> Vec<f32> {
+        let take = n.min(self.len);
+        let mut out = Vec::with_capacity(take);
+        for k in 0..take {
+            out.push(self.buf[(self.head + self.len - take + k) % self.buf.len()]);
+        }
+        out
+    }
 }
 
 impl VizBuffer {
     pub fn new(capacity: usize) -> Self {
-        Self { inner: Arc::new(Mutex::new(Vec::with_capacity(capacity))), capacity }
+        Self { inner: Arc::new(Mutex::new(VizRing::new(capacity))) }
     }
 
-    pub fn push(&self, s: f32) {
-        let mut v = self.inner.lock().unwrap();
-        if v.len() >= self.capacity {
-            v.remove(0);
+    /// Push a batch of mono samples under a single lock.
+    pub fn push_batch(&self, samples: &[f32]) {
+        let mut r = self.inner.lock().unwrap();
+        for &s in samples {
+            r.push(s);
         }
-        v.push(s);
     }
 
     pub fn latest(&self, n: usize) -> Vec<f32> {
-        let v = self.inner.lock().unwrap();
-        let len = v.len();
-        let start = len.saturating_sub(n);
-        let mut out = v[start..].to_vec();
+        let r = self.inner.lock().unwrap();
+        let mut out = r.latest(n);
         if out.len() < n {
             out.resize(n, 0.0);
         }
@@ -37,10 +66,23 @@ impl VizBuffer {
     }
 }
 
+/// Samples to accumulate before pushing into the ring buffer (one lock per batch).
+const PUSH_BATCH: usize = 256;
+
 /// A Source wrapper that down-mixes to mono and mirrors samples into a VizBuffer.
 struct MonoTee<S: Source<Item = f32>> {
     inner: S,
     viz: VizBuffer,
+    pending: Vec<f32>,
+}
+
+impl<S: Source<Item = f32>> MonoTee<S> {
+    fn flush(&mut self) {
+        if !self.pending.is_empty() {
+            self.viz.push_batch(&self.pending);
+            self.pending.clear();
+        }
+    }
 }
 
 impl<S: Source<Item = f32>> Iterator for MonoTee<S> {
@@ -58,10 +100,14 @@ impl<S: Source<Item = f32>> Iterator for MonoTee<S> {
             }
         }
         if n == 0 {
+            self.flush();
             return None;
         }
         let mono = sum / n as f32;
-        self.viz.push(mono);
+        self.pending.push(mono);
+        if self.pending.len() >= PUSH_BATCH {
+            self.flush();
+        }
         Some(mono)
     }
 }
@@ -93,7 +139,6 @@ pub struct Player {
     pub viz: VizBuffer,
     pub playing: bool,
     pub position: Duration,
-    pub last_tick: std::time::Instant,
 }
 
 impl Player {
@@ -107,21 +152,29 @@ impl Player {
             viz: VizBuffer::new(4096),
             playing: false,
             position: Duration::ZERO,
-            last_tick: std::time::Instant::now(),
         })
     }
 
     pub fn play_file(&mut self, path: &Path) -> Result<()> {
         let file = std::fs::File::open(path)?;
         let dec = Decoder::new(file)?;
-        let tee = MonoTee { inner: dec.convert_samples(), viz: self.viz.clone() };
+        let tee = MonoTee {
+            inner: dec.convert_samples(),
+            viz: self.viz.clone(),
+            pending: Vec::with_capacity(PUSH_BATCH),
+        };
         self.sink.clear();
         self.sink.append(tee);
         self.sink.play();
         self.playing = true;
         self.position = Duration::ZERO;
-        self.last_tick = std::time::Instant::now();
         Ok(())
+    }
+
+    pub fn stop(&mut self) {
+        self.sink.stop();
+        self.playing = false;
+        self.position = Duration::ZERO;
     }
 
     pub fn pause(&mut self) {
@@ -132,22 +185,15 @@ impl Player {
     pub fn resume(&mut self) {
         self.sink.play();
         self.playing = true;
-        self.last_tick = std::time::Instant::now();
     }
 
     pub fn is_finished(&self) -> bool {
         self.sink.empty()
     }
 
+    /// Real playback position from the audio backend (accurate across pause/buffer).
     pub fn update_position(&mut self) {
-        if self.playing {
-            let now = std::time::Instant::now();
-            let dt = now - self.last_tick;
-            self.position += dt;
-            self.last_tick = now;
-        } else {
-            self.last_tick = std::time::Instant::now();
-        }
+        self.position = self.sink.get_pos();
     }
 
     pub fn set_volume(&self, v: f32) {

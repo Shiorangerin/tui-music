@@ -2,15 +2,14 @@ mod app;
 mod ui;
 
 use std::io;
+use std::io::Stdout;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::Parser;
 use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::execute;
-use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
-};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
@@ -33,18 +32,28 @@ fn main() -> anyhow::Result<()> {
         app.selected = Some(0);
     }
 
+    with_terminal(|terminal| run(terminal, &mut app))
+}
+
+/// Enter raw mode + alternate screen for the duration of `f`, and always
+/// restore the terminal afterwards — even if `f` errors or the app panics.
+fn with_terminal<F>(f: F) -> anyhow::Result<()>
+where
+    F: FnOnce(&mut Terminal<CrosstermBackend<Stdout>>) -> anyhow::Result<()>,
+{
     enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    run(&mut terminal, &mut app)?;
-
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
-    Ok(())
+    let result = (|| {
+        let mut stdout = io::stdout();
+        execute!(stdout, EnterAlternateScreen)?;
+        let backend = CrosstermBackend::new(stdout);
+        let mut terminal = Terminal::new(backend)?;
+        let r = f(&mut terminal);
+        let _ = terminal.show_cursor();
+        let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+        r
+    })();
+    let _ = disable_raw_mode();
+    result
 }
 
 fn run<B: ratatui::backend::Backend>(
@@ -59,13 +68,13 @@ fn run<B: ratatui::backend::Backend>(
             while event::poll(Duration::ZERO).unwrap_or(false) {
                 if let Event::Key(k) = event::read()? {
                     if k.kind != KeyEventKind::Release {
-                        app.handle_key(k)?;
+                        app.handle_key(k);
                     }
                 }
             }
         }
 
-        app.update(terminal.size()?.width.saturating_sub(2).max(16) as usize)?;
+        app.update(terminal.size()?.width.saturating_sub(2).max(16) as usize);
 
         if app.should_quit {
             break;

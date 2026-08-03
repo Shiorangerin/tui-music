@@ -141,11 +141,10 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
     let items: Vec<ListItem> = app
         .display
         .iter()
-        .enumerate()
-        .map(|(view_i, &orig)| {
+        .map(|&orig| {
             let tracks = app.active_tracks();
             let t = &tracks[orig];
-            let is_cur = Some(view_i) == app.current;
+            let is_cur = app.current_track == Some(orig);
             let marker = if is_cur { ">" } else { " " };
             let name = t.display_name();
             let style = if is_cur {
@@ -315,10 +314,9 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let shuf = if app.shuffle { "On" } else { "Off" };
     let pos = fmt_dur(app.player.position);
 
-    let (cur_dur, name) = if let Some(v) = app.current {
-        if let Some(o) = app.display.get(v) {
-            let tracks = app.active_tracks();
-            let t = &tracks[*o];
+    let (cur_dur, name) = if let Some(o) = app.current_track {
+        let tracks = app.active_tracks();
+        if let Some(t) = tracks.get(o) {
             (t.duration, t.display_name())
         } else {
             (0.0, "None".to_string())
@@ -391,7 +389,15 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
 
     let inner_h = area.height.saturating_sub(2);
     let mut lines = Vec::new();
-    if inner_h >= 1 {
+    if let Some(err) = &app.error {
+        if inner_h >= 1 {
+            lines.push(Line::from(Span::styled(
+                format!(" ERR: {}", err),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            )));
+        }
+    }
+    if inner_h >= 1 + lines.len() as u16 {
         lines.push(status);
     }
     if inner_h >= 2 {

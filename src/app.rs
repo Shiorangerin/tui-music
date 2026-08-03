@@ -11,16 +11,20 @@ pub struct App {
     pub active_playlist: usize,
     pub display: Vec<usize>,
     pub selected: Option<usize>,
-    pub current: Option<usize>,
+    /// Track identity: index into `active_tracks()` (survives search re-filters).
+    pub current_track: Option<usize>,
     pub repeat: RepeatMode,
     pub shuffle: bool,
     pub volume: f32,
     pub player: Player,
-    pub bars: Vec<u16>,
     pub smoothed: Vec<f32>,
     pub should_quit: bool,
     pub search: String,
     pub search_active: bool,
+    /// Last non-fatal error, shown in the footer.
+    pub error: Option<String>,
+    rng_state: u64,
+    shuffle_queue: Vec<usize>,
 }
 
 impl App {
@@ -44,16 +48,18 @@ impl App {
             active_playlist: active,
             display,
             selected: None,
-            current: None,
+            current_track: None,
             repeat: RepeatMode::All,
             shuffle: false,
             volume: 0.6,
             player: Player::new()?,
-            bars: Vec::new(),
             smoothed: Vec::new(),
             should_quit: false,
             search: String::new(),
             search_active: false,
+            error: None,
+            rng_state: seed_rng(),
+            shuffle_queue: Vec::new(),
         })
     }
 
@@ -76,8 +82,11 @@ impl App {
         }
         let next = (next as usize) % n;
         self.active_playlist = next;
-        self.current = None;
+        self.player.stop();
+        self.current_track = None;
+        self.shuffle_queue.clear();
         self.search.clear();
+        self.error = None;
         self.rebuild_display();
     }
 
@@ -145,66 +154,104 @@ impl App {
         self.selected = Some(next);
     }
 
-    pub fn play_selected(&mut self) -> anyhow::Result<()> {
+    pub fn play_selected(&mut self) {
         if let Some(v) = self.selected {
             if let Some(o) = self.orig_of(v) {
-                self.play_track(o)?;
-                self.current = Some(v);
+                self.play_track(o);
             }
         }
-        Ok(())
     }
 
-    pub fn play_track(&mut self, playlist_track_i: usize) -> anyhow::Result<()> {
+    pub fn play_track(&mut self, playlist_track_i: usize) {
         let tracks = self.active_tracks();
         if playlist_track_i >= tracks.len() {
-            return Ok(());
+            return;
         }
         let path = tracks[playlist_track_i].path.clone();
-        self.player.play_file(&path)?;
+        if let Err(e) = self.player.play_file(&path) {
+            self.error = Some(format!("cannot play: {}", e));
+            return;
+        }
         self.player.set_volume(self.volume);
-        Ok(())
+        self.current_track = Some(playlist_track_i);
+        self.error = None;
     }
 
-    pub fn next(&mut self) -> anyhow::Result<()> {
+    /// Display index of the current track, if it's visible in the current filter.
+    fn current_view(&self) -> Option<usize> {
+        let ct = self.current_track?;
+        self.display.iter().position(|&o| o == ct)
+    }
+
+    fn next_rand(&mut self) -> u64 {
+        // xorshift64* — fast, tiny, uniform.
+        let mut x = self.rng_state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.rng_state = x;
+        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    fn reset_shuffle(&mut self) {
+        let n = self.display.len();
+        let mut order: Vec<usize> = (0..n).collect();
+        let mut i = n;
+        while i > 1 {
+            i -= 1;
+            // multiply-high: uniform in [0, i+1) without modulo bias.
+            let j = ((self.next_rand() >> 32) as usize).wrapping_mul(i + 1) >> 32;
+            order.swap(i, j);
+        }
+        // Don't let shuffle start with the currently playing track.
+        if let Some(cur) = self.current_view() {
+            if order.first() == Some(&cur) && order.len() > 1 {
+                order.rotate_left(1);
+            }
+        }
+        self.shuffle_queue = order;
+    }
+
+    pub fn next(&mut self) {
         let n = self.display.len();
         if n == 0 {
-            return Ok(());
+            return;
         }
-        let cur = self.current.unwrap_or(0);
         let next_v = if self.shuffle {
-            if n == 1 { 0 } else {
-                let r = (rand_next(n)) as usize;
-                if r == cur { (r + 1) % n } else { r }
+            if self.shuffle_queue.len() != n {
+                self.reset_shuffle();
+            }
+            if let Some(r) = self.shuffle_queue.first().copied() {
+                self.shuffle_queue.remove(0);
+                r
+            } else {
+                self.current_view().unwrap_or(0)
             }
         } else {
+            let cur = self.current_view().unwrap_or(0);
             (cur + 1) % n
         };
         if let Some(o) = self.orig_of(next_v) {
-            self.play_track(o)?;
-            self.current = Some(next_v);
+            self.play_track(o);
         }
-        Ok(())
     }
 
-    pub fn prev(&mut self) -> anyhow::Result<()> {
+    pub fn prev(&mut self) {
         let n = self.display.len();
         if n == 0 {
-            return Ok(());
+            return;
         }
-        let cur = self.current.unwrap_or(0);
+        let cur = self.current_view().unwrap_or(0);
         let prev_v = if cur == 0 { n - 1 } else { cur - 1 };
         if let Some(o) = self.orig_of(prev_v) {
-            self.play_track(o)?;
-            self.current = Some(prev_v);
+            self.play_track(o);
         }
-        Ok(())
     }
 
     pub fn toggle_pause(&mut self) {
         if self.player.playing {
             self.player.pause();
-        } else if self.current.is_some() {
+        } else if self.current_track.is_some() {
             self.player.resume();
         }
     }
@@ -219,6 +266,7 @@ impl App {
 
     pub fn toggle_shuffle(&mut self) {
         self.shuffle = !self.shuffle;
+        self.shuffle_queue.clear();
     }
 
     pub fn change_volume(&mut self, delta: f32) {
@@ -240,28 +288,27 @@ impl App {
         }
     }
 
-    pub fn update(&mut self, num_bars: usize) -> anyhow::Result<()> {
+    pub fn update(&mut self, num_bars: usize) {
         self.player.update_position();
 
-        if let Some(v) = self.current {
-            if let Some(o) = self.orig_of(v) {
-                let tracks = self.active_tracks();
-                let d = tracks[o].duration;
-                let mut finished = self.player.is_finished();
-                if d > 0.0 && self.player.position.as_secs_f64() >= d && self.player.is_finished() {
-                    finished = true;
-                }
-                if finished && self.player.playing {
-                    self.player.playing = false;
-                    match self.repeat {
-                        RepeatMode::One => {
-                            self.play_track(o)?;
-                        }
-                        _ => {
-                            let n = self.display.len();
-                            if v + 1 < n || matches!(self.repeat, RepeatMode::All) {
-                                self.next()?;
-                            }
+        if let Some(o) = self.current_track {
+            let tracks = self.active_tracks();
+            let d = tracks[o].duration;
+            let mut finished = self.player.is_finished();
+            if d > 0.0 && self.player.position.as_secs_f64() >= d && self.player.is_finished() {
+                finished = true;
+            }
+            if finished && self.player.playing {
+                self.player.playing = false;
+                match self.repeat {
+                    RepeatMode::One => {
+                        self.play_track(o);
+                    }
+                    _ => {
+                        let n = self.display.len();
+                        let v = self.current_view();
+                        if v.is_none() || v.unwrap() + 1 < n || matches!(self.repeat, RepeatMode::All) {
+                            self.next();
                         }
                     }
                 }
@@ -271,11 +318,9 @@ impl App {
         let samples = self.player.viz.latest(tui_music::viz::FFT_N);
         let raw = tui_music::viz::compute(&samples, num_bars.max(16));
         self.smooth(raw);
-        self.bars = self.smoothed.iter().map(|&v| (v * 20.0) as u16).collect();
-        Ok(())
     }
 
-    pub fn handle_key(&mut self, key: KeyEvent) -> anyhow::Result<()> {
+    pub fn handle_key(&mut self, key: KeyEvent) {
         if self.search_active {
             match key.code {
                 KeyCode::Esc => self.exit_search(false),
@@ -284,7 +329,7 @@ impl App {
                 KeyCode::Char(c) => self.search_push(c),
                 _ => {}
             }
-            return Ok(());
+            return;
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match (ctrl, key.code) {
@@ -294,25 +339,176 @@ impl App {
             (false, KeyCode::Char(']')) => self.switch_playlist(1),
             (false, KeyCode::Up | KeyCode::Char('k')) => self.selected_mut(-1),
             (false, KeyCode::Down | KeyCode::Char('j')) => self.selected_mut(1),
-            (false, KeyCode::Enter) | (false, KeyCode::Char('l')) => self.play_selected()?,
+            (false, KeyCode::Enter) | (false, KeyCode::Char('l')) => self.play_selected(),
             (false, KeyCode::Char(' ')) => self.toggle_pause(),
-            (false, KeyCode::Char('n')) | (false, KeyCode::Tab) => self.next()?,
-            (false, KeyCode::Char('p')) | (false, KeyCode::BackTab) => self.prev()?,
+            (false, KeyCode::Char('n')) | (false, KeyCode::Tab) => self.next(),
+            (false, KeyCode::Char('p')) | (false, KeyCode::BackTab) => self.prev(),
             (false, KeyCode::Char('r')) => self.cycle_repeat(),
             (false, KeyCode::Char('s')) => self.toggle_shuffle(),
             (false, KeyCode::Char('=')) | (false, KeyCode::Char('+')) => self.change_volume(0.05),
             (false, KeyCode::Char('-')) => self.change_volume(-0.05),
             _ => {}
         }
-        Ok(())
     }
 }
 
-fn rand_next(n: usize) -> u32 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    use std::time::SystemTime;
-    let mut h = DefaultHasher::new();
-    SystemTime::now().hash(&mut h);
-    (h.finish() as u32) % (n.max(1) as u32)
+fn seed_rng() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x9E37_79B9_7F4A_7C15);
+    let pid = std::process::id() as u64;
+    nanos ^ pid.wrapping_mul(0x2545_F491_4F6C_DD1D)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::Path;
+    use tui_music::library::{Playlist, Track};
+
+    /// Write a tiny valid mono 16-bit PCM WAV file (0.5s of a sine at 8kHz).
+    fn write_wav(path: &Path, freq: f32) {
+        let rate = 8000u32;
+        let n = (rate / 2) as usize; // 0.5s
+        let mut data = Vec::with_capacity(n * 2);
+        for i in 0..n {
+            let s = (i as f32 / rate as f32 * freq * 2.0 * std::f32::consts::PI).sin();
+            let v = (s * i16::MAX as f32) as i16;
+            data.extend_from_slice(&v.to_le_bytes());
+        }
+        let data_len = data.len() as u32;
+        let mut f = Vec::new();
+        f.extend_from_slice(b"RIFF");
+        f.extend_from_slice(&(36 + data_len).to_le_bytes());
+        f.extend_from_slice(b"WAVE");
+        f.extend_from_slice(b"fmt ");
+        f.extend_from_slice(&16u32.to_le_bytes());
+        f.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        f.extend_from_slice(&1u16.to_le_bytes()); // mono
+        f.extend_from_slice(&rate.to_le_bytes());
+        f.extend_from_slice(&(rate * 2).to_le_bytes()); // byte rate
+        f.extend_from_slice(&2u16.to_le_bytes()); // block align
+        f.extend_from_slice(&16u16.to_le_bytes()); // bits
+        f.extend_from_slice(b"data");
+        f.extend_from_slice(&data_len.to_le_bytes());
+        f.extend_from_slice(&data);
+        fs::write(path, f).unwrap();
+    }
+
+    fn playlist(dir: &Path, n: usize) -> Playlist {
+        Playlist {
+            name: "test".into(),
+            tracks: (0..n)
+                .map(|i| {
+                    let p = dir.join(format!("t{}.wav", i));
+                    write_wav(&p, 440.0 + i as f32 * 100.0);
+                    Track {
+                        path: p,
+                        title: format!("t{}", i),
+                        artist: String::new(),
+                        duration: 0.5,
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    fn app_with(n: usize) -> App {
+        let dir = std::env::temp_dir()
+            .join(format!("tui_music_test_{}_{}", std::process::id(), n));
+        fs::create_dir_all(&dir).unwrap();
+        let mut app = App {
+            music_dir: dir.clone(),
+            playlists: vec![playlist(&dir, n)],
+            active_playlist: 0,
+            display: (0..n).collect(),
+            selected: None,
+            current_track: None,
+            repeat: RepeatMode::All,
+            shuffle: false,
+            volume: 0.6,
+            player: Player::new().unwrap(),
+            smoothed: Vec::new(),
+            should_quit: false,
+            search: String::new(),
+            search_active: false,
+            error: None,
+            rng_state: 1,
+            shuffle_queue: Vec::new(),
+        };
+        if n > 0 {
+            app.selected = Some(0);
+        }
+        app
+    }
+
+    #[test]
+    fn display_index_survives_search_refilter() {
+        let mut app = app_with(4);
+        app.play_selected(); // plays track 0
+        assert_eq!(app.current_track, Some(0));
+
+        // Type a search that hides the current track.
+        app.enter_search();
+        app.search_push('3'); // only track 3 matches
+        assert_eq!(app.display, vec![3]);
+        assert_eq!(app.current_view(), None);
+        // current_track identity is preserved even though it's not visible.
+        assert_eq!(app.current_track, Some(0));
+
+        // Exiting search keeps the filter; identity is preserved even when hidden.
+        app.exit_search(true);
+        assert_eq!(app.current_track, Some(0));
+        assert_eq!(app.current_view(), None);
+
+        // Clearing the filter restores the correct view mapping.
+        app.exit_search(false);
+        assert_eq!(app.current_view(), Some(0));
+    }
+
+    #[test]
+    fn next_wraps_within_filtered_list() {
+        let mut app = app_with(5);
+        app.play_selected();
+        app.next();
+        assert_eq!(app.current_track, Some(1));
+        app.next();
+        assert_eq!(app.current_track, Some(2));
+    }
+
+    #[test]
+    fn shuffle_uses_full_permutation_no_mod_bias() {
+        let mut app = app_with(100);
+        app.shuffle = true;
+        app.reset_shuffle();
+        let mut q = app.shuffle_queue.clone();
+        q.sort_unstable();
+        assert_eq!(q, (0..100).collect::<Vec<_>>(), "must be a permutation");
+    }
+
+    #[test]
+    fn shuffle_skips_current_as_first() {
+        let mut app = app_with(10);
+        app.selected = Some(4);
+        app.play_selected();
+        assert_eq!(app.current_track, Some(4));
+        app.shuffle = true;
+        app.next();
+        let got = app.current_track.unwrap();
+        assert_ne!(got, 4, "shuffle must not immediately repeat the current track");
+    }
+
+    #[test]
+    fn corrupt_track_is_not_fatal() {
+        let mut app = app_with(2);
+        app.playlists[0].tracks[0].path = PathBuf::from("/tmp/definitely_missing.mp3");
+        app.selected = Some(0);
+        app.play_selected();
+        assert!(app.error.is_some(), "error should be surfaced, not panic");
+        assert_eq!(app.current_track, None);
+        app.should_quit = false; // still alive
+    }
 }
